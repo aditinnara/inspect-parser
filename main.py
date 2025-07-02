@@ -68,6 +68,9 @@ async def evaluate(
             if log.status != "success":
                 raise HTTPException(status_code=500, detail="Evaluation failed: " + log.status)
 
+
+            # TODO: make this prettier, idk how we want the output to look
+            
             # Do this if we want to return only sample summaries...
             # Return the sample summaries as a JSON dump
             summaries = read_eval_log_sample_summaries(log_file)
