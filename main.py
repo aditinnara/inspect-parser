@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 import tempfile, os, subprocess
 from inspect_ai.log import read_eval_log_sample_summaries, read_eval_log, read_eval_log_samples
 
-# Loads env variables, including relevant ML model API keys
+# figure out env vars
 import os
 from dotenv import load_dotenv
 load_dotenv()
