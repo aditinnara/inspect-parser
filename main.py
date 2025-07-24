@@ -1,197 +1,280 @@
-# WITHOUT PYARROW
-# from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-# from fastapi.responses import JSONResponse
-# import tempfile, os, subprocess
-# from inspect_ai.log import read_eval_log_sample_summaries, read_eval_log, read_eval_log_samples
-
-# # figure out env vars
-# import os
-# from dotenv import load_dotenv
-# load_dotenv()
-
-# # Create API instance
-# app = FastAPI()
-
-# # run-eval endpoint lets the user provide eval.py, data.csv, and the model name
-# # These are required inputs
-# @app.post("/run_eval/")
-# async def evaluate(
-#     eval_file: UploadFile = File(...),
-#     data_file: UploadFile = File(...),
-#     model: str = Form(...)
-# ):
-#     try:
-#         # Create temp dir 
-#         with tempfile.TemporaryDirectory() as tmpdir:
-#             # Save eval.py and data.csv as temp files in that temp dir
-#             eval_path = os.path.join(tmpdir, "eval.py")
-#             data_path = os.path.join(tmpdir, "data.csv")
-
-#             with open(eval_path, "wb") as f:
-#                 f.write(await eval_file.read())
-
-#             with open(data_path, "wb") as f:
-#                 f.write(await data_file.read())
-
-#             # Run inspect eval on the provided evaluation
-#             result = subprocess.run(
-#                 ["inspect", "eval", "eval.py", "--model", model],
-#                 cwd=tmpdir,
-#                 capture_output=True,
-#                 text=True
-#             )
-
-#             # Handle errors from running `inspect eval`
-#             if result.returncode != 0:
-#                 raise HTTPException(status_code=500, detail={
-#                     "message": "inspect eval failed",
-#                     "stderr": result.stderr,
-#                     "stdout": result.stdout
-#                 })
-
-#             # Navigate to logs directory
-#             logs_dir = os.path.join(tmpdir, "logs")
-
-#             # Get the latest log file based on modification time
-#             log_files = sorted(
-#                 [os.path.join(logs_dir, f) for f in os.listdir(logs_dir)],
-#                 key=os.path.getmtime,
-#                 reverse=True
-#             )
-
-#             # Make sure there's actually a log. If so, grab the first (latest) log.
-#             if not log_files:
-#                 raise HTTPException(status_code=500, detail="No log files found.")
-#             log_file = log_files[0]
-
-#             # Open the log if there wasn't an error
-#             log = read_eval_log(log_file)
-#             if log.status != "success":
-#                 raise HTTPException(status_code=500, detail="Evaluation failed: " + log.status)
-
-
-#             # TODO: make this prettier, idk how we want the output to look
-            
-#             # Do this if we want to return only sample summaries...
-#             # Return the sample summaries as a JSON dump
-#             summaries = read_eval_log_sample_summaries(log_file)
-#             return JSONResponse(content=[s.model_dump() for s in summaries])
-
-#             # # Do this if we want to return the entire sample list...
-#             # # Use read_eval_log_samples to get all samples (generator)
-#             # samples_generator = read_eval_log_samples(log_file)
-#             # # Convert generator to list of dicts
-#             # samples_list = [sample.model_dump() for sample in samples_generator]
-#             # return JSONResponse(content=samples_list)
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
-
-
-# WITH PYARROW
 from fastapi.responses import StreamingResponse
 import pyarrow as pa
 import pandas as pd
-import io
+import io, datetime
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
-import tempfile, os, subprocess
-from inspect_ai.log import read_eval_log_sample_summaries, read_eval_log, read_eval_log_samples
+import tempfile, os, subprocess, logging
+from inspect_ai.log import read_eval_log, read_eval_log_samples
+from pydantic import BaseModel
 
-# figure out env vars
-import os
-from dotenv import load_dotenv
-load_dotenv()
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+logger = logging.getLogger(__name__)
 
-# Create API instance
+# Mock Vault store schema
+VAULT = {
+    "models": {
+        "ollama/llama2:latest": {
+            "model_backend": "ollama",
+            "model_key": "ollama/llama2:latest",
+            "env_vars": {
+                "OLLAMA_BASE_URL": "http://bigbertha:11434/v1"
+            }
+        },
+        "mistral": {
+            "model_backend": "vllm",
+            "model_key": "mistral",
+            "env_vars": {
+                "VLLM_API_BASE": "http://localhost:8000"
+            }
+        }
+    }, 
+    
+    "api_keys": {
+        "openai": "sk-xxx",
+        "gemini": "gemini-key",
+        "anthropic": "anthropic-key"
+    }
+}
+
+
+# Create FastAPI instance
 app = FastAPI()
 
-# run-eval endpoint lets the user provide eval.py, data.csv, and the model name
-# These are required inputs
 @app.post("/run_eval/")
 async def evaluate(
     eval_file: UploadFile = File(...),
     data_file: UploadFile = File(...),
     model: str = Form(...)
 ):
-    try:
-        # Create temp dir 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Save eval.py and data.csv as temp files in that temp dir
-            eval_path = os.path.join(tmpdir, "eval.py")
-            data_path = os.path.join(tmpdir, "data.csv")
-            
-            with open(eval_path, "wb") as f:
-                f.write(await eval_file.read())
+    logger.info(f"Received request to /run_eval/ with model: {model}")
 
-            with open(data_path, "wb") as f:
-                f.write(await data_file.read())
+    # If we test with echo command
+    if model == "echo":
+        # just return input CSV + score column with 100.0 for all rows
+        try:
+            logger.info("Echo model detected, skipping inspect, returning input data with success score")
 
-            # Run inspect eval on the provided evaluation and model
-            result = subprocess.run(
-                ["inspect", "eval", "eval.py", "--model", model],
-                cwd=tmpdir,
-                capture_output=True,
-                text=True
-            )
+            data_bytes = await data_file.read()
+            df = pd.read_csv(io.BytesIO(data_bytes))
+            logger.info(f"Input CSV loaded, shape: {df.shape}")
 
-            # Handle failures from inspect eval
-            if result.returncode != 0:
-                raise HTTPException(status_code=500, detail={
-                    "message": "inspect eval failed",
-                    "stderr": result.stderr,
-                    "stdout": result.stdout
-                })
+            df["score"] = 100.0
+            df["score"] = df["score"].astype("float32")
+            logger.info("Added 'score' column with 100.0 float32 for all rows")
 
-            # Navigate to logs directory and grab most recent log
-            logs_dir = os.path.join(tmpdir, "logs")
-            log_files = sorted(
-                [os.path.join(logs_dir, f) for f in os.listdir(logs_dir)],
-                key=os.path.getmtime,
-                reverse=True
-            )
-
-            # Open the log if there wasn't an error
-            if not log_files:
-                raise HTTPException(status_code=500, detail="No log files found.")
-            log_file = log_files[0]
-
-            # Make sure evaluation succeeded before getting the samples
-            log = read_eval_log(log_file)
-            if log.status != "success":
-                raise HTTPException(status_code=500, detail="Evaluation failed: " + log.status)
-
-            # Get summaries -- there will be 1 per sample
-            summaries = read_eval_log_sample_summaries(log_file)
-
-            # Build a dict of outputs by sample ID
-            outputs_by_id = {}
-            for sample in read_eval_log_samples(log_file):
-                output_texts = [c.message.content for c in sample.output.choices] if sample.output else None
-                outputs_by_id[str(sample.id)] = output_texts  
-
-            # Combine each summary with its output_texts
-            dicts = []
-            for summary in summaries:
-                d = summary.model_dump()
-                sample_id = str(summary.id)
-                d["output_texts"] = outputs_by_id.get(sample_id)
-                dicts.append(d)
-
-            df = pd.json_normalize(dicts)  
-            # Convert to Arrow Table
             table = pa.Table.from_pandas(df)
 
-            # Serialize to Arrow IPC stream
+
             sink = io.BytesIO()
             with pa.ipc.new_stream(sink, table.schema) as writer:
                 writer.write_table(table)
             sink.seek(0)
+
+            logger.info("Returning Arrow stream response for echo model with scores")
             return StreamingResponse(
                 content=sink,
                 media_type="application/vnd.apache.arrow.stream",
-                headers={
-                    "Content-Disposition": "attachment; filename=summaries.arrow"
-                }
+                headers={"Content-Disposition": "attachment; filename=echo_with_scores.arrow"}
             )
+        except Exception as e:
+            logger.exception("Failed to process echo model")
+            raise HTTPException(status_code=500, detail=f"Echo model processing error: {e}")
+
+    
+    # Otherwise prepare an inspect call
+    try:
+        # Look up model config from vault
+        model_config = VAULT["models"].get(model)
+        if not model_config:
+            logger.error(f"Unknown model requested: {model}")
+            raise HTTPException(status_code=400, detail=f"Unknown model: {model}")
+        logger.info(f"Model config retrieved: {model_config}")
+
+        # Prepare environment variables for subprocess
+        env = os.environ.copy()
+        env["MODEL_BACKEND"] = model_config["model_backend"]
+        env["MODEL_KEY"] = model_config["model_key"]
+        env.update(model_config.get("env_vars", {}))
+
+        env["OPENAI_API_KEY"] = VAULT["api_keys"]["openai"]
+        env["GEMINI_API_KEY"] = VAULT["api_keys"]["gemini"]
+        env["ANTHROPIC_API_KEY"] = VAULT["api_keys"]["anthropic"]
+        logger.info("Environment variables set for subprocess.")
+
+        # Create temp dir 
+            # with tempfile.TemporaryDirectory() as tmpdir:
+        
+        # Using permanent dir for now/testing
+        logs_root = "./eval_logs"
+        os.makedirs(logs_root, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        tmpdir = os.path.join(logs_root, f"run_{timestamp}")
+        os.makedirs(tmpdir, exist_ok=True)
+        logger.info(f"Created persistent directory: {tmpdir}")
+
+        # Save eval.py and data.csv
+        eval_path = os.path.join(tmpdir, "eval.py")
+        data_path = os.path.join(tmpdir, "data.csv")
+        logger.info(f"Saving eval.py to {eval_path}")
+        with open(eval_path, "wb") as f:
+            f.write(await eval_file.read())
+        logger.info(f"Saving data.csv to {data_path}")
+        with open(data_path, "wb") as f:
+            f.write(await data_file.read())
+
+        # Run inspect eval command
+        cmd = ["inspect", "eval", "eval.py", "--model", model]
+        logger.info(f"Running subprocess: {' '.join(cmd)}")
+        result = subprocess.run(
+            cmd,
+            cwd=tmpdir,
+            capture_output=True,
+            text=True,
+            env=env
+        )
+        logger.info(f"Subprocess finished with return code {result.returncode}")
+        if result.stdout:
+            logger.info(f"Subprocess stdout:\n{result.stdout}")
+        if result.stderr:
+            logger.warning(f"Subprocess stderr:\n{result.stderr}")
+
+        if result.returncode != 0:
+            logger.error("inspect eval failed")
+            raise HTTPException(status_code=500, detail={
+                "message": "inspect eval failed",
+                "stderr": result.stderr,
+                "stdout": result.stdout
+            })
+
+        # Find log files
+        logs_dir = os.path.join(tmpdir, "logs")
+        log_files = sorted(
+            [os.path.join(logs_dir, f) for f in os.listdir(logs_dir)],
+            key=os.path.getmtime,
+            reverse=True
+        )
+        logger.info(f"Found {len(log_files)} log files")
+
+        if not log_files:
+            logger.error("No log files found after evaluation.")
+            raise HTTPException(status_code=500, detail="No log files found.")
+
+        # Get the log file  
+        log_file = log_files[0]
+        logger.info(f"Using log file: {log_file}")
+
+        # Return relevant info from log
+        dicts, accuracy, stderr = return_summary_dicts(log_file)
+
+        # Nomalize dict and convert to arrow table
+        df = pd.json_normalize(dicts)
+        logger.info(f"Normalized dataframe shape: {df.shape}")
+
+        table = pa.Table.from_pandas(df)
+        logger.info("Converted dataframe to Arrow table")
+
+
+        # Add stats as metadata
+        table = table.replace_schema_metadata({
+            **(table.schema.metadata or {}),
+            b"accuracy": str(accuracy).encode("utf-8"),
+            b"stderr": str(stderr).encode("utf-8"),
+        })
+
+        sink = io.BytesIO()
+        with pa.ipc.new_stream(sink, table.schema) as writer:
+            writer.write_table(table)
+        sink.seek(0)
+
+        # Return arrow table as a stream
+        logger.info("Returning Arrow stream response")
+        return StreamingResponse(
+            content=sink,
+            media_type="application/vnd.apache.arrow.stream",
+            headers={
+                "Content-Disposition": "attachment; filename=summaries.arrow"
+            }
+        )
+
     except Exception as e:
+        logger.exception("Unhandled exception in /run_eval/")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Given a log file, extract the relevant info
+def return_summary_dicts(log_file):
+    log = read_eval_log(log_file)
+    if log.status != "success":
+        logger.error(f"Evaluation failed with status: {log.status}")
+        raise HTTPException(status_code=500, detail="Evaluation failed: " + log.status)
+
+
+
+    # getting scores -- todo: figure out why this is a list
+    for score in log.results.scores:
+        print(f"Accuracy: {score.metrics['accuracy'].value}")
+        accuracy = score.metrics['accuracy'].value
+        print(f"Stderr: {score.metrics['stderr'].value}")
+        stderr = score.metrics['stderr'].value
+
+    dicts = []
+
+    for sample in read_eval_log_samples(log_file):
+        # Normalize input
+        if isinstance(sample.input, list):
+            input_text = " ".join(m.content for m in sample.input if hasattr(m, "content"))
+        else:
+            input_text = sample.input
+
+        # Extract output 
+        if sample.output and sample.output.choices:
+            output_texts = [choice.message.content for choice in sample.output.choices if hasattr(choice.message, "content")]
+        else:
+            output_texts = None
+
+        # Extract choices (list of strings) if any
+        choices = sample.choices if sample.choices is not None else None
+
+        # Extract target (string or list)
+        target = sample.target if sample.target is not None else None
+
+        # Extract messages (list of ChatMessage) => convert to list of strings for readability
+        if sample.messages:
+            messages_text = []
+            for msg in sample.messages:
+                if hasattr(msg, "content"):
+                    messages_text.append(msg.content)
+                else:
+                    messages_text.append(str(msg))
+        else:
+            messages_text = None
+
+        # Extract scores dictionary (serialize Score objects to dict if needed)
+        if sample.scores:
+            scores = {k: v.model_dump() if isinstance(v, BaseModel) else v for k, v in sample.scores.items()}
+        else:
+            scores = None
+
+        # Metadata (dict)
+        metadata = sample.metadata if sample.metadata else None
+
+        # Model name from output.model (str)
+        model_name = sample.output.model if sample.output and hasattr(sample.output, "model") else None
+
+        dicts.append({
+            "input": input_text,
+            "output": output_texts,
+            "choices": choices,
+            "target": target,
+            "messages": messages_text,
+            "scores": scores,
+            "metadata": metadata,
+            "model": model_name
+        })
+
+    return dicts, accuracy, stderr
