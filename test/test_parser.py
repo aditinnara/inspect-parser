@@ -15,7 +15,7 @@ files = {
     'data_file': open(eval_to_test + '/data.csv', 'rb')
 }
 data = {
-    'model': 'ollama/llama2:latest'
+    'model': 'ollama/llama3:latest'
     # 'model': 'echo'
 }
 
