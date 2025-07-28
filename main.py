@@ -272,7 +272,6 @@ def return_summary_dicts(log_file):
             "choices": choices,
             "target": target,
             "messages": messages_text,
-            "scores": scores,
             "metadata": metadata,
             "model": model_name
         })

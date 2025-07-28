@@ -1,4 +1,3 @@
-# WITH PYARROW
 import requests
 import pyarrow.ipc as pa_ipc
 import pandas as pd
