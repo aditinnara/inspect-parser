@@ -1,6 +1,7 @@
 from fastapi.responses import StreamingResponse
 import pyarrow as pa
 import pandas as pd
+import numpy as np
 import io, datetime
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
@@ -18,11 +19,11 @@ logger = logging.getLogger(__name__)
 # Mock Vault store schema
 VAULT = {
     "models": {
-        "ollama/llama2:latest": {
+        "ollama/llama3:latest": {
             "model_backend": "ollama",
-            "model_key": "ollama/llama2:latest",
+            "model_key": "ollama/llama3:latest",
             "env_vars": {
-                "OLLAMA_BASE_URL": "http://bigbertha:11434/v1"
+                "OLLAMA_BASE_URL": "http://ollama-dev:11434/v1"
             }
         },
         "mistral": {
@@ -273,6 +274,7 @@ def return_summary_dicts(log_file):
             "target": target,
             "messages": messages_text,
             "metadata": metadata,
+            "scores": np.float32(1.0 if scores.get("pattern", {}).get("value") == "C" else 0.0),
             "model": model_name
         })
 
