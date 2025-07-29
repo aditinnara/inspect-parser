@@ -1,3 +1,4 @@
+from collections import defaultdict
 from fastapi.responses import StreamingResponse
 import pyarrow as pa
 import pandas as pd
@@ -170,7 +171,7 @@ async def evaluate(
         logger.info(f"Using log file: {log_file}")
 
         # Return relevant info from log
-        dicts, accuracy, stderr = return_summary_dicts(log_file)
+        dicts, metrics = return_summary_dicts(log_file)
 
         # Nomalize dict and convert to arrow table
         df = pd.json_normalize(dicts)
@@ -183,8 +184,7 @@ async def evaluate(
         # Add stats as metadata
         table = table.replace_schema_metadata({
             **(table.schema.metadata or {}),
-            b"accuracy": str(accuracy).encode("utf-8"),
-            b"stderr": str(stderr).encode("utf-8"),
+            b"metrics": str(metrics).encode("utf-8")
         })
 
         sink = io.BytesIO()
@@ -216,12 +216,11 @@ def return_summary_dicts(log_file):
 
 
 
-    # getting scores -- todo: figure out why this is a list
+    # This will be a list of the results of each scorer. We're currently only supporting one scorer per eval.
     for score in log.results.scores:
-        print(f"Accuracy: {score.metrics['accuracy'].value}")
-        accuracy = score.metrics['accuracy'].value
-        print(f"Stderr: {score.metrics['stderr'].value}")
-        stderr = score.metrics['stderr'].value
+        metrics = {}
+        for metric_type, metric_info in score.metrics.items():
+            metrics[metric_type] = metric_info.value
 
     dicts = []
 
@@ -278,4 +277,4 @@ def return_summary_dicts(log_file):
             "model": model_name
         })
 
-    return dicts, accuracy, stderr
+    return dicts, metrics

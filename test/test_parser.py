@@ -33,11 +33,9 @@ if response.status_code == 200:
     print(df.head())
 
     metadata = table.schema.metadata
-    accuracy = metadata.get(b"accuracy", b"").decode("utf-8")
-    stderr = metadata.get(b"stderr", b"").decode("utf-8")
+    metrics = metadata.get(b"metrics", b"").decode("utf-8")
 
-    print(f"\nAccuracy (from metadata): {accuracy}")
-    print(f"StdErr (from metadata): {stderr}")
+    print(f"Metrics: {metrics}")
 
 else:
     try:
