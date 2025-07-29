@@ -1,4 +1,3 @@
-from collections import defaultdict
 from fastapi.responses import StreamingResponse
 import pyarrow as pa
 import pandas as pd
@@ -9,6 +8,19 @@ from fastapi.responses import JSONResponse
 import tempfile, os, subprocess, logging
 from inspect_ai.log import read_eval_log, read_eval_log_samples
 from pydantic import BaseModel
+import json
+
+# Arrow schema
+ARROW_OUTPUT_SCHEMA = pa.schema([
+    pa.field("input", pa.string()), # Input to assistant
+    pa.field("output", pa.list_(pa.string())),  # Solver output from assistant 
+    pa.field("choices", pa.list_(pa.string())), # Multiple choices provided to assistant if eval was multiple choice
+    pa.field("target", pa.string()),    # Target response from assistant
+    pa.field("messages", pa.list_(pa.string())),    # All messages between assistant and user
+    pa.field("metadata", pa.string()),  # serialized as JSON
+    pa.field("score", pa.float32()),    # Score for each Sample output as an f32 btwn 0.0 and 1.0
+    pa.field("model", pa.string()), # Model used to generate assistant responses
+])  
 
 # Configure logging
 logging.basicConfig(
@@ -177,8 +189,28 @@ async def evaluate(
         df = pd.json_normalize(dicts)
         logger.info(f"Normalized dataframe shape: {df.shape}")
 
-        table = pa.Table.from_pandas(df)
-        logger.info("Converted dataframe to Arrow table")
+        # table = pa.Table.from_pandas(df)
+        # logger.info("Converted dataframe to Arrow table")
+
+        # Preprocess DataFrame to match schema
+        df = df.astype({
+            "input": "string",
+            "score": "float32",
+            "model": "string",
+            "target": "string"
+        })
+
+        # Convert metadata dict to JSON string
+        if "metadata" in df.columns:
+            df["metadata"] = df["metadata"].apply(lambda x: json.dumps(x) if isinstance(x, dict) else None)
+
+        # Ensure list fields are lists (Arrow will error if not)
+        for col in ["output", "choices", "messages"]:
+            if col in df.columns:
+                df[col] = df[col].apply(lambda x: x if isinstance(x, list) else [])
+
+        # Create Arrow table with explicit schema
+        table = pa.Table.from_pandas(df, schema=ARROW_OUTPUT_SCHEMA, preserve_index=False)
 
 
         # Add stats as metadata
