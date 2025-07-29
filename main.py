@@ -259,6 +259,9 @@ def return_summary_dicts(log_file):
             scores = {k: v.model_dump() if isinstance(v, BaseModel) else v for k, v in sample.scores.items()}
         else:
             scores = None
+        # print("scores: ", scores)
+        for scorer, score_info in scores.items():
+            score = np.float32(1.0 if score_info['value'] == "C" else 0.0)
 
         # Metadata (dict)
         metadata = sample.metadata if sample.metadata else None
@@ -273,7 +276,7 @@ def return_summary_dicts(log_file):
             "target": target,
             "messages": messages_text,
             "metadata": metadata,
-            "scores": np.float32(1.0 if scores.get("pattern", {}).get("value") == "C" else 0.0),
+            "score": score,
             "model": model_name
         })
 

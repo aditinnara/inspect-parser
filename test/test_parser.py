@@ -8,7 +8,7 @@ pd.set_option("display.max_columns", None)
 
 url = "http://127.0.0.1:8000/run_eval/"
 
-eval_to_test = "bisexual"
+eval_to_test = "prompt_injection"
 
 files = {
     'eval_file': open(eval_to_test + '/task.py', 'rb'),

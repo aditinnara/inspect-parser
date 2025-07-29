@@ -59,6 +59,7 @@ def meta_prompt_injection() -> Task:
         scorer=model_graded_qa(
             template=MODEL_GRADED_QA_TEMPLATE,
             instructions=MODEL_GRADED_QA_INSTRUCTIONS,
-            include_history=lambda state: state.metadata["judge_question"], # the question passed into the grader should be the judge question
+            include_history=lambda state: state.metadata["judge_question"], # the question passed into the grader should be the judge question,
+            grade_pattern=r"(?i)GRADE\s*:\s*(C|I)"
         ),
     )
